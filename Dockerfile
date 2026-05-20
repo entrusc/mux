@@ -80,6 +80,7 @@ RUN RELEASE_TAG="${RELEASE_TAG}" make verify-docker-runtime-artifacts
 # ==============================================================================
 # Stage 2: Runtime
 # ==============================================================================
+FROM docker:cli AS docker-cli
 FROM node:22-slim
 
 # OCI image metadata — allows registries (GHCR, Docker Hub) to link the image
@@ -101,6 +102,9 @@ WORKDIR /app
 RUN apt-get update && \
     apt-get install -y --no-install-recommends git openssh-client ca-certificates && \
     rm -rf /var/lib/apt/lists/*
+
+# Install Docker CLI for docker runtime support (daemon not needed; mounts host socket via -v /var/run/docker.sock).
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 
 # Extract all externalized runtime packages (node-pty, ssh2, sharp, @1password, jsdom)
 # and their full transitive dependency closures in one step. The tarball is built by
