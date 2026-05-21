@@ -50,6 +50,7 @@ import type { IdleDispatcher } from "@/node/services/idleDispatcher";
 import { getSigningService, type SigningService } from "@/node/services/signingService";
 import { coderService, type CoderService } from "@/node/services/coderService";
 import { SshPromptService } from "@/node/services/sshPromptService";
+import { HttpsCredentialPromptService } from "@/node/services/httpsCredentialPromptService";
 import { WorkspaceLifecycleHooks } from "@/node/services/workspaceLifecycleHooks";
 import { WorktreeArchiveSnapshotService } from "@/node/services/worktreeArchiveSnapshotService";
 import {
@@ -129,6 +130,7 @@ export class ServiceContainer {
   public readonly desktopTokenManager: DesktopTokenManager;
   public readonly desktopBridgeServer: DesktopBridgeServer;
   public readonly sshPromptService = new SshPromptService();
+  public readonly httpsCredentialPromptService = new HttpsCredentialPromptService();
   private readonly ptyService: PTYService;
   public readonly idleCompactionService: IdleCompactionService;
   public readonly idleDispatcher: IdleDispatcher;
@@ -221,7 +223,11 @@ export class ServiceContainer {
     this.extensionMetadata = core.extensionMetadata;
     this.backgroundProcessManager = core.backgroundProcessManager;
 
-    this.projectService = new ProjectService(config, this.sshPromptService);
+    this.projectService = new ProjectService(
+      config,
+      this.sshPromptService,
+      this.httpsCredentialPromptService
+    );
     this.projectService.setWorkspaceService(this.workspaceService);
     this.desktopSessionManager = new DesktopSessionManager({
       config,
@@ -527,6 +533,7 @@ export class ServiceContainer {
       coderService: this.coderService,
       serverAuthService: this.serverAuthService,
       sshPromptService: this.sshPromptService,
+      httpsCredentialPromptService: this.httpsCredentialPromptService,
       desktopSessionManager: this.desktopSessionManager,
       desktopTokenManager: this.desktopTokenManager,
       desktopBridgeServer: this.desktopBridgeServer,

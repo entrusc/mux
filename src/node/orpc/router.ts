@@ -27,6 +27,7 @@ import type {
 } from "@/common/orpc/types";
 import type { WorkspaceMetadata } from "@/common/types/workspace";
 import type { SshPromptEvent, SshPromptRequest } from "@/common/orpc/schemas/ssh";
+import type { HttpsCredentialPromptRequest, HttpsPromptEvent } from "@/common/orpc/schemas/https";
 import {
   createAuthMiddleware,
   extractClientIpAddress,
@@ -2599,6 +2600,12 @@ export const router = (authToken?: string) => {
         .output(schemas.projects.clone.output)
         .handler(async function* ({ context, input, signal }) {
           yield* context.projectService.cloneWithProgress(input, signal);
+        }),
+      pull: t
+        .input(schemas.projects.pull.input)
+        .output(schemas.projects.pull.output)
+        .handler(async ({ context, input }) => {
+          return context.projectService.pull(input.projectPath);
         }),
       pickDirectory: t
         .input(schemas.projects.pickDirectory.input)
@@ -5324,6 +5331,50 @@ export const router = (authToken?: string) => {
           .output(schemas.ssh.prompt.respond.output)
           .handler(({ context, input }) => {
             context.sshPromptService.respond(input.requestId, input.response);
+            return Ok(undefined);
+          }),
+      },
+    },
+    https: {
+      prompt: {
+        subscribe: t
+          .input(schemas.https.prompt.subscribe.input)
+          .output(schemas.https.prompt.subscribe.output)
+          .handler(async function* ({ context, signal }) {
+            if (signal?.aborted) return;
+
+            const service = context.httpsCredentialPromptService;
+            const releaseResponder = service.registerInteractiveResponder();
+            const queue = createAsyncEventQueue<HttpsPromptEvent>();
+
+            const onRequest = (req: HttpsCredentialPromptRequest) =>
+              queue.push({ type: "request" as const, ...req });
+            const onRemoved = (requestId: string) =>
+              queue.push({ type: "removed" as const, requestId });
+
+            // Atomic handshake: register listener + snapshot in one step.
+            const { snapshot, unsubscribe } = service.subscribeRequests(onRequest, onRemoved);
+            for (const req of snapshot) {
+              queue.push({ type: "request" as const, ...req });
+            }
+
+            const onAbort = () => queue.end();
+            signal?.addEventListener("abort", onAbort, { once: true });
+
+            try {
+              yield* queue.iterate();
+            } finally {
+              signal?.removeEventListener("abort", onAbort);
+              releaseResponder();
+              queue.end();
+              unsubscribe();
+            }
+          }),
+        respond: t
+          .input(schemas.https.prompt.respond.input)
+          .output(schemas.https.prompt.respond.output)
+          .handler(({ context, input }) => {
+            context.httpsCredentialPromptService.respond(input.requestId, input.response);
             return Ok(undefined);
           }),
       },

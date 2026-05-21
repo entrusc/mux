@@ -1,9 +1,12 @@
 import type { MediatedPromptOutcome } from "@/node/runtime/openSshPromptMediation";
+import type { HttpsPromptOutcome } from "@/node/runtime/openHttpsPromptMediation";
 
 export type CloneErrorCode =
   | "ssh_host_key_rejected"
   | "ssh_credential_cancelled"
   | "ssh_prompt_timeout"
+  | "https_credential_cancelled"
+  | "https_prompt_timeout"
   | "clone_failed"
   | "destination_exists";
 
@@ -37,6 +40,21 @@ export function classifySshCloneFailure(ctx: CloneFailureContext): CloneErrorCod
     return "ssh_credential_cancelled";
   }
 
+  return "clone_failed";
+}
+
+export interface HttpsCloneFailureContext {
+  stderr: string;
+  promptOutcome: HttpsPromptOutcome | null;
+}
+
+export function classifyHttpsCloneFailure(ctx: HttpsCloneFailureContext): CloneErrorCode {
+  if (ctx.promptOutcome?.reason === "timeout") {
+    return "https_prompt_timeout";
+  }
+  if (ctx.promptOutcome?.reason === "responded" && ctx.promptOutcome.response.length === 0) {
+    return "https_credential_cancelled";
+  }
   return "clone_failed";
 }
 

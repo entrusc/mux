@@ -288,6 +288,7 @@ export {
   type SigningCapabilities,
   type SignatureEnvelope,
   ssh,
+  https,
   terminal,
   tokenizer,
   update,

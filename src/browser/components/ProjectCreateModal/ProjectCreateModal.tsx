@@ -343,6 +343,10 @@ function formatCloneError(event: { code: string; error: string }): string {
       return "SSH authentication was cancelled.";
     case "ssh_prompt_timeout":
       return "SSH authentication timed out.";
+    case "https_credential_cancelled":
+      return "HTTPS authentication was cancelled.";
+    case "https_prompt_timeout":
+      return "HTTPS authentication timed out.";
     case "destination_exists":
       return event.error || "Destination already exists";
     default:

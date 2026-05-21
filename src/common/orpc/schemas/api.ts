@@ -38,6 +38,7 @@ import {
 import { ProjectConfigSchema } from "./project";
 import { ResultSchema } from "./result";
 import { SshPromptEventSchema, SshPromptResponseInputSchema } from "./ssh";
+import { HttpsPromptEventSchema, HttpsPromptResponseInputSchema } from "./https";
 import {
   RuntimeConfigSchema,
   RuntimeAvailabilitySchema,
@@ -644,6 +645,8 @@ export const projects = {
             "ssh_host_key_rejected",
             "ssh_credential_cancelled",
             "ssh_prompt_timeout",
+            "https_credential_cancelled",
+            "https_prompt_timeout",
             "clone_failed",
             "destination_exists",
           ]),
@@ -651,6 +654,13 @@ export const projects = {
           normalizedPath: z.string().nullish(),
         }),
       ])
+    ),
+  },
+  pull: {
+    input: z.object({ projectPath: z.string() }).strict(),
+    output: ResultSchema(
+      z.object({ alreadyUpToDate: z.boolean(), output: z.string() }),
+      z.string()
     ),
   },
   pickDirectory: {
@@ -2576,6 +2586,19 @@ export const ssh = {
     },
     respond: {
       input: SshPromptResponseInputSchema,
+      output: ResultSchema(z.void(), z.string()),
+    },
+  },
+};
+
+export const https = {
+  prompt: {
+    subscribe: {
+      input: z.void(),
+      output: eventIterator(HttpsPromptEventSchema),
+    },
+    respond: {
+      input: HttpsPromptResponseInputSchema,
       output: ResultSchema(z.void(), z.string()),
     },
   },

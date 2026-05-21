@@ -23,9 +23,12 @@ import {
 } from "@/node/services/fileCompletionsIndex";
 import { log } from "@/node/services/log";
 import type { SshPromptService } from "@/node/services/sshPromptService";
+import type { HttpsCredentialPromptService } from "@/node/services/httpsCredentialPromptService";
 import { createMediatedAskpassSession } from "@/node/runtime/openSshPromptMediation";
+import { createHttpsAskpassSession } from "@/node/runtime/openHttpsPromptMediation";
 import {
   classifySshCloneFailure,
+  classifyHttpsCloneFailure,
   summarizeCloneStderr,
   type CloneErrorCode,
 } from "./sshCloneFailure";
@@ -266,6 +269,7 @@ const SSH_PROTOCOL_SCHEMES = new Set(["ssh:", "git+ssh:", "ssh+git:"]);
 type CloneTransport =
   | { kind: "ssh"; hostname: string; port: number }
   | { kind: "ssh-scp"; hostname: string; port: number }
+  | { kind: "https"; hostname: string }
   | { kind: "non-ssh" };
 
 /**
@@ -285,10 +289,14 @@ function parseCloneTransport(rawUrl: string): CloneTransport {
   // Protocol URLs: ssh://, git+ssh://, ssh+git://
   try {
     const parsed = new URL(trimmedUrl);
-    if (SSH_PROTOCOL_SCHEMES.has(parsed.protocol.toLowerCase()) && parsed.hostname) {
+    const proto = parsed.protocol.toLowerCase();
+    if (SSH_PROTOCOL_SCHEMES.has(proto) && parsed.hostname) {
       const parsedPort = Number.parseInt(parsed.port, 10);
       const port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 22;
       return { kind: "ssh", hostname: parsed.hostname, port };
+    }
+    if (proto === "https:" && parsed.hostname) {
+      return { kind: "https", hostname: parsed.hostname };
     }
   } catch {
     // Not a valid protocol URL; treat as non-SSH.
@@ -299,12 +307,38 @@ function parseCloneTransport(rawUrl: string): CloneTransport {
 
 /** Detect whether a clone URL will use SSH transport. */
 function isSshCloneUrl(url: string): boolean {
-  return parseCloneTransport(url).kind !== "non-ssh";
+  const kind = parseCloneTransport(url).kind;
+  return kind === "ssh" || kind === "ssh-scp";
+}
+
+/** Detect whether a clone URL will use HTTPS transport. */
+function isHttpsCloneUrl(url: string): boolean {
+  return parseCloneTransport(url).kind === "https";
+}
+
+/**
+ * Idempotently configures git to use the credential store so credentials
+ * entered during HTTPS clone/pull are persisted to ~/.git-credentials.
+ * Only sets the helper if none is already configured.
+ */
+async function ensureGitCredentialHelperStore(): Promise<void> {
+  try {
+    using checkProc = execFileAsync("git", ["config", "--global", "credential.helper"]);
+    const { stdout } = await checkProc.result.catch(() => ({ stdout: "", stderr: "" }));
+    if (stdout.trim()) {
+      // An existing credential helper is already configured — respect it.
+      return;
+    }
+  } catch {
+    // git exits non-zero when the key is absent; that is the case we want to handle.
+  }
+  using setProc = execFileAsync("git", ["config", "--global", "credential.helper", "store"]);
+  await setProc.result;
 }
 
 function deriveSshClonePromptDedupeKey(cloneUrl: string): string | undefined {
   const transport = parseCloneTransport(cloneUrl);
-  if (transport.kind === "non-ssh") {
+  if (transport.kind !== "ssh" && transport.kind !== "ssh-scp") {
     return undefined;
   }
 
@@ -371,13 +405,16 @@ export class ProjectService {
   private readonly fileCompletionsCache = new Map<string, FileCompletionsCacheEntry>();
   private directoryPicker?: (initialPath?: string | null) => Promise<string | null>;
   private readonly sshPromptService: SshPromptService | undefined;
+  private readonly httpsCredentialPromptService: HttpsCredentialPromptService | undefined;
   private workspaceService?: WorkspaceRemover;
 
   constructor(
     private readonly config: Config,
-    sshPromptService?: SshPromptService
+    sshPromptService?: SshPromptService,
+    httpsCredentialPromptService?: HttpsCredentialPromptService
   ) {
     this.sshPromptService = sshPromptService;
+    this.httpsCredentialPromptService = httpsCredentialPromptService;
   }
 
   setWorkspaceService(workspaceService: WorkspaceRemover): void {
@@ -582,6 +619,7 @@ export class ProjectService {
     // Preserve full stderr so failed clones can surface git's fatal message instead of only exit code 128.
     let collectedStderr = "";
     let askpass: Awaited<ReturnType<typeof createMediatedAskpassSession>> | undefined;
+    let httpsAskpass: Awaited<ReturnType<typeof createHttpsAskpassSession>> | undefined;
 
     const cleanupPartialClone = async () => {
       if (cloneSucceeded) {
@@ -667,9 +705,24 @@ export class ProjectService {
             })
           : undefined;
 
+      // Set up HTTPS askpass mediation for HTTPS clone URLs.
+      // Git calls GIT_ASKPASS for username/password prompts; we surface these
+      // through the in-app credential dialog so the user is never blocked.
+      httpsAskpass =
+        isHttpsCloneUrl(cloneUrl) && this.httpsCredentialPromptService
+          ? await createHttpsAskpassSession({
+              httpsCredentialPromptService: this.httpsCredentialPromptService,
+            })
+          : undefined;
+
       const child = spawn("git", ["clone", "--progress", "--", cloneUrl, cloneWorkPath], {
         stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...(askpass?.env ?? {}) },
+        env: {
+          ...process.env,
+          GIT_TERMINAL_PROMPT: "0",
+          ...(askpass?.env ?? {}),
+          ...(httpsAskpass?.env ?? {}),
+        },
         // Detached children become process-group leaders on Unix so we can
         // reliably terminate clone helpers (ssh, shells) as a full tree.
         detached: process.platform !== "win32",
@@ -810,14 +863,16 @@ export class ProjectService {
           (exitSignal != null
             ? `Clone failed: process terminated by signal ${String(exitSignal)}`
             : `Clone failed with exit code ${exitCode ?? "unknown"}`);
-        yield {
-          type: "error",
-          code: classifySshCloneFailure({
-            stderr: collectedStderr,
-            promptOutcome: askpass?.getLastPromptOutcome() ?? null,
-          }),
-          error: errorMessage,
-        };
+        const code = httpsAskpass
+          ? classifyHttpsCloneFailure({
+              stderr: collectedStderr,
+              promptOutcome: httpsAskpass.getLastPromptOutcome(),
+            })
+          : classifySshCloneFailure({
+              stderr: collectedStderr,
+              promptOutcome: askpass?.getLastPromptOutcome() ?? null,
+            });
+        yield { type: "error", code, error: errorMessage };
         return;
       }
 
@@ -901,6 +956,17 @@ export class ProjectService {
         return;
       }
 
+      if (httpsAskpass) {
+        // Configure credential.helper=store so the credentials git just used
+        // are persisted to ~/.git-credentials for future clone/pull operations.
+        try {
+          await ensureGitCredentialHelperStore();
+        } catch (err) {
+          log.warn("Failed to configure git credential.helper=store:", err);
+          // Non-fatal: credentials may not persist, but the clone succeeded.
+        }
+      }
+
       cloneSucceeded = true;
       yield { type: "success", projectConfig, normalizedPath };
     } catch (error) {
@@ -912,6 +978,7 @@ export class ProjectService {
       };
     } finally {
       askpass?.cleanup();
+      httpsAskpass?.cleanup();
       await cleanupPartialClone();
     }
   }
@@ -930,6 +997,70 @@ export class ProjectService {
     }
 
     return Err("Clone did not return a completion event");
+  }
+
+  async pull(
+    projectPath: string
+  ): Promise<Result<{ alreadyUpToDate: boolean; output: string }, string>> {
+    const validation = await validateProjectPath(projectPath).catch(() => null);
+    if (!validation?.valid) {
+      return Err(validation?.error ?? "Invalid project path");
+    }
+    const normalizedPath = validation.expandedPath!;
+
+    const gitRepo = await isGitRepository(normalizedPath).catch(() => false);
+    if (!gitRepo) {
+      return Err("Not a git repository");
+    }
+
+    let httpsAskpass: Awaited<ReturnType<typeof createHttpsAskpassSession>> | undefined;
+    try {
+      // Detect the remote URL to decide whether HTTPS credential mediation is needed.
+      using remoteProc = execFileAsync("git", [
+        "-C",
+        normalizedPath,
+        "remote",
+        "get-url",
+        "origin",
+      ]);
+      const { stdout: remoteUrlRaw } = await remoteProc.result.catch(() => ({
+        stdout: "",
+        stderr: "",
+      }));
+      const remoteUrl = remoteUrlRaw.trim();
+      if (isHttpsCloneUrl(remoteUrl) && this.httpsCredentialPromptService) {
+        httpsAskpass = await createHttpsAskpassSession({
+          httpsCredentialPromptService: this.httpsCredentialPromptService,
+        });
+      }
+    } catch {
+      // Could not determine remote URL; proceed without credential mediation.
+    }
+
+    try {
+      using pullProc = execFileAsync("git", ["-C", normalizedPath, "pull", "--ff-only"], {
+        env: {
+          ...process.env,
+          GIT_TERMINAL_PROMPT: "0",
+          ...(httpsAskpass?.env ?? {}),
+        },
+      });
+      const { stdout, stderr } = await pullProc.result;
+      const output = (stdout + stderr).trim();
+      const alreadyUpToDate = /Already up.to.date/i.test(output);
+      return Ok({ alreadyUpToDate, output });
+    } catch (err) {
+      const promptOutcome = httpsAskpass?.getLastPromptOutcome() ?? null;
+      if (promptOutcome?.reason === "timeout") {
+        return Err("HTTPS authentication timed out during pull");
+      }
+      if (promptOutcome?.reason === "responded" && promptOutcome.response.length === 0) {
+        return Err("HTTPS authentication was cancelled");
+      }
+      return Err(`git pull failed: ${getErrorMessage(err)}`);
+    } finally {
+      httpsAskpass?.cleanup();
+    }
   }
 
   async remove(projectPath: string, force = false): Promise<Result<void, ProjectRemoveError>> {

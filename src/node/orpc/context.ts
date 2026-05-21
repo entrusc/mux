@@ -39,6 +39,7 @@ import type { PolicyService } from "@/node/services/policyService";
 import type { CoderService } from "@/node/services/coderService";
 import type { ServerAuthService } from "@/node/services/serverAuthService";
 import type { SshPromptService } from "@/node/services/sshPromptService";
+import type { HttpsCredentialPromptService } from "@/node/services/httpsCredentialPromptService";
 import type { AnalyticsService } from "@/node/services/analytics/analyticsService";
 import type { DesktopBridgeServer } from "@/node/services/desktop/DesktopBridgeServer";
 import type { DesktopSessionManager } from "@/node/services/desktop/DesktopSessionManager";
@@ -85,6 +86,7 @@ export interface ORPCContext {
   coderService: CoderService;
   serverAuthService: ServerAuthService;
   sshPromptService: SshPromptService;
+  httpsCredentialPromptService: HttpsCredentialPromptService;
   analyticsService: AnalyticsService;
   desktopSessionManager: DesktopSessionManager;
   desktopTokenManager: DesktopTokenManager;

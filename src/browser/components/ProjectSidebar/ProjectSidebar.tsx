@@ -83,6 +83,7 @@ import {
   PositionedMenuItem,
 } from "@/browser/components/PositionedMenu/PositionedMenu";
 import {
+  ArrowDownToLine,
   ChevronRight,
   EllipsisVertical,
   Folder,
@@ -910,6 +911,8 @@ const ProjectSidebarInner: React.FC<ProjectSidebarProps> = ({
   } | null>(null);
   const projectRemoveError = usePopoverError();
   const sectionRemoveError = usePopoverError();
+  const projectPullError = usePopoverError();
+  const [pullingProjectPath, setPullingProjectPath] = useState<string | null>(null);
 
   const handleDraftVisibilityChange = useCallback(
     (projectPath: string, draftId: string, isVisible: boolean) => {
@@ -1503,6 +1506,35 @@ const ProjectSidebarInner: React.FC<ProjectSidebarProps> = ({
     handleOpenSecrets(projectMenuTargetPath);
     closeProjectContextMenu();
   }, [closeProjectContextMenu, handleOpenSecrets, projectMenuTargetPath]);
+
+  const handleProjectMenuPull = useCallback(
+    async (buttonElement?: HTMLElement) => {
+      if (!projectMenuTargetPath || !api) {
+        return;
+      }
+
+      const projectPath = projectMenuTargetPath;
+      closeProjectContextMenu();
+      setPullingProjectPath(projectPath);
+
+      try {
+        const result = await api.projects.pull({ projectPath });
+        if (!result.success) {
+          let anchor: { top: number; left: number } | undefined;
+          if (buttonElement) {
+            const rect = buttonElement.getBoundingClientRect();
+            anchor = { top: rect.top + window.scrollY, left: rect.right + 10 };
+          }
+          projectPullError.showError(projectPath, result.error ?? "Pull failed", anchor);
+        }
+      } catch (err) {
+        projectPullError.showError(projectPath, getErrorMessage(err));
+      } finally {
+        setPullingProjectPath(null);
+      }
+    },
+    [api, closeProjectContextMenu, projectMenuTargetPath, projectPullError]
+  );
 
   const handleProjectMenuDelete = useCallback(
     (buttonElement?: HTMLElement) => {
@@ -2934,6 +2966,21 @@ const ProjectSidebarInner: React.FC<ProjectSidebarProps> = ({
               }}
             />
             <PositionedMenuItem
+              icon={<ArrowDownToLine className="h-4 w-4 shrink-0" strokeWidth={1.8} />}
+              label={
+                pullingProjectPath !== null && pullingProjectPath === projectMenuTargetPath
+                  ? "Pulling..."
+                  : "Pull latest changes"
+              }
+              disabled={
+                !hasProjectMenuTarget ||
+                (pullingProjectPath !== null && pullingProjectPath === projectMenuTargetPath)
+              }
+              onClick={(event) => {
+                void handleProjectMenuPull(event.currentTarget);
+              }}
+            />
+            <PositionedMenuItem
               icon={<Palette className="h-4 w-4 shrink-0" strokeWidth={1.8} />}
               label="Change color"
               disabled={!hasProjectMenuTarget}
@@ -3064,6 +3111,11 @@ const ProjectSidebarInner: React.FC<ProjectSidebarProps> = ({
             error={sectionRemoveError.error}
             prefix="Failed to remove sub-project"
             onDismiss={sectionRemoveError.clearError}
+          />
+          <PopoverError
+            error={projectPullError.error}
+            prefix="Pull failed"
+            onDismiss={projectPullError.clearError}
           />
           {!(isDesktopMode() && collapsed) && (
             // Keep the sidebar divider above sticky row content and scroll-layer visuals.
