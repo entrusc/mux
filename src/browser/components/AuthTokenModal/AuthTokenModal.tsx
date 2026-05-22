@@ -242,60 +242,46 @@ export function AuthTokenModal(props: AuthTokenModalProps) {
     // Do nothing - modal cannot be closed without submitting
   }, []);
 
+  // True once the user has initiated GitHub login — token form is hidden while this is active.
+  const githubFlowActive = githubLoginStatus !== "idle";
+
   return (
     <Dialog open={props.isOpen} onOpenChange={handleOpenChange}>
       <DialogContent showCloseButton={false}>
         <DialogHeader>
           <DialogTitle>Authentication Required</DialogTitle>
           <DialogDescription>
-            This server requires authentication. Enter the token provided at startup, or sign in
-            with GitHub when enabled.
+            {githubFlowActive
+              ? "Authorize the app on GitHub using the code below."
+              : githubDeviceFlowEnabled
+                ? "Sign in with GitHub, or enter the token provided at startup."
+                : "Enter the token provided at server startup."}
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          {props.error && (
-            <div className="bg-error-bg text-error rounded p-2 px-3 text-[13px]">{props.error}</div>
-          )}
+        {props.error && (
+          <div className="bg-error-bg text-error rounded p-2 px-3 text-[13px]">{props.error}</div>
+        )}
 
-          <input
-            type="password"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder="Enter auth token"
-            autoFocus
-            className="bg-modal-bg border-border-medium focus:border-accent placeholder:text-muted text-foreground rounded border px-3 py-2.5 text-sm focus:outline-none"
-          />
-
-          <DialogFooter className="pt-0">
-            <Button type="submit" disabled={!token.trim()} className="w-full">
-              Connect with token
+        {/* GitHub login — shown when server supports it. While the flow is active the token
+            form below is hidden so the user only sees GitHub-related UI. */}
+        {!githubOptionsLoading && githubDeviceFlowEnabled && (
+          <div className="flex flex-col gap-3">
+            <Button
+              onClick={() => {
+                void startGithubLogin();
+              }}
+              disabled={githubLoginStatus === "starting" || githubLoginStatus === "waiting"}
+              className="w-full"
+            >
+              {githubLoginStatus === "waiting"
+                ? "Waiting for GitHub authorization..."
+                : githubLoginStatus === "starting"
+                  ? "Starting GitHub login..."
+                  : githubLoginStatus === "error"
+                    ? "Retry GitHub login"
+                    : "Login with GitHub"}
             </Button>
-          </DialogFooter>
-        </form>
-
-        {githubOptionsLoading ? null : githubDeviceFlowEnabled ? (
-          <div className="border-border-medium space-y-3 border-t pt-3">
-            <div className="text-foreground text-sm font-medium">Or login with GitHub</div>
-
-            <div className="flex items-center gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  void startGithubLogin();
-                }}
-                disabled={githubLoginStatus === "starting" || githubLoginStatus === "waiting"}
-                className="w-full"
-              >
-                {githubLoginStatus === "waiting"
-                  ? "Waiting for GitHub authorization..."
-                  : githubLoginStatus === "starting"
-                    ? "Starting GitHub login..."
-                    : githubLoginStatus === "error"
-                      ? "Retry GitHub login"
-                      : "Login with GitHub"}
-              </Button>
-            </div>
 
             {githubLoginStatus === "waiting" && githubUserCode ? (
               <div className="bg-background-tertiary space-y-2 rounded-md p-3">
@@ -341,8 +327,46 @@ export function AuthTokenModal(props: AuthTokenModalProps) {
             {githubLoginError ? (
               <p className="text-destructive text-xs">GitHub login failed: {githubLoginError}</p>
             ) : null}
+
+            {githubFlowActive && (
+              <button
+                type="button"
+                onClick={clearGithubLoginUi}
+                className="text-muted hover:text-foreground text-xs underline-offset-2 hover:underline"
+              >
+                Use auth token instead
+              </button>
+            )}
           </div>
-        ) : null}
+        )}
+
+        {/* Token form — hidden while GitHub flow is active so both methods are never shown at once. */}
+        {!githubFlowActive && (
+          <>
+            {githubDeviceFlowEnabled && (
+              <div className="border-border-medium flex items-center gap-2 border-t pt-1">
+                <span className="text-muted text-xs">Or enter token manually</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+              <input
+                type="password"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder="Enter auth token"
+                autoFocus={!githubDeviceFlowEnabled}
+                className="bg-modal-bg border-border-medium focus:border-accent placeholder:text-muted text-foreground rounded border px-3 py-2.5 text-sm focus:outline-none"
+              />
+
+              <DialogFooter className="pt-0">
+                <Button type="submit" disabled={!token.trim()} className="w-full">
+                  Connect with token
+                </Button>
+              </DialogFooter>
+            </form>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );
