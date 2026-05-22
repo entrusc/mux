@@ -1268,4 +1268,18 @@ export class DockerRuntime extends RemoteRuntime {
   override getMuxHome(): string {
     return "/var/mux";
   }
+
+  /**
+   * Stop the container without removing it.
+   * Called on workspace archive so the container doesn't run headlessly while archived.
+   * ensureReady() restarts it automatically via `docker start` when the workspace is next used.
+   *
+   * Uses runSpawnCommand (array args) to avoid any shell interpolation of the container name.
+   */
+  async stopContainer(): Promise<void> {
+    if (!this.containerName) {
+      return;
+    }
+    await runSpawnCommand("docker", ["stop", this.containerName], 30000);
+  }
 }

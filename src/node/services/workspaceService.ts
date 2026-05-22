@@ -72,6 +72,7 @@ import {
 import { generateWorkspaceIdentity } from "@/node/services/workspaceTitleGenerator";
 import { NAME_GEN_PREFERRED_MODELS } from "@/common/constants/nameGeneration";
 import type { DevcontainerRuntime } from "@/node/runtime/DevcontainerRuntime";
+import { DockerRuntime } from "@/node/runtime/DockerRuntime";
 import { WorktreeRuntime } from "@/node/runtime/WorktreeRuntime";
 import {
   getDevcontainerContainerName,
@@ -4434,6 +4435,22 @@ export class WorkspaceService extends EventEmitter {
           session.emitMetadata(enrichedMetadata);
         } else {
           this.emit("metadata", { workspaceId, metadata: enrichedMetadata });
+        }
+      }
+
+      // Best-effort: stop Docker container so it doesn't run headlessly while archived.
+      // ensureReady() restarts it automatically via `docker start` when the workspace is next used.
+      if (updatedMetadata && isDockerRuntime(updatedMetadata.runtimeConfig)) {
+        try {
+          const runtime = createRuntimeForWorkspace(updatedMetadata);
+          if (runtime instanceof DockerRuntime) {
+            await runtime.stopContainer();
+          }
+        } catch (error) {
+          log.debug("Failed to stop Docker container during archive", {
+            workspaceId,
+            error: getErrorMessage(error),
+          });
         }
       }
 
